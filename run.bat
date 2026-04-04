@@ -14,6 +14,7 @@ call .venv\Scripts\activate.bat
 
 :: Start the FastAPI server using Uvicorn
 echo Running FastAPI Server on http://127.0.0.1:8000
+echo Main app: http://127.0.0.1:8000/
 python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 
 pause

@@ -1,69 +1,80 @@
-# Lecture Teller
+# LectureTeller
 
-Claude가 만든 구어체 강의 텍스트를 OpenAI `tts-1` 음성으로 변환해 로컬에서 바로 재생하는 개인용 웹앱입니다.
+LectureTeller는 `외부 STT / 외부 AI 결과 -> 학습용 TTS 자산` 흐름에 맞춘 로컬 앱이다.
 
-## 기능
+지금 기준 메인 제품은 React v2이며, 루트 `/`에서 바로 열린다. 핵심 작업 흐름은 아래와 같다.
 
-- FastAPI 기반 로컬 서버
-- 단일 `index.html` UI
-- 과목 / 단원 아코디언 사이드바
-- OpenAI TTS 생성 후 `audio/과목명/단원명.mp3` 저장
-- `data.json` 하나로 메타데이터 관리
-- 과목 삭제 시 하위 단원과 MP3 일괄 삭제
-- 단원 삭제 시 해당 MP3도 함께 삭제
+1. NotebookLM 같은 외부 도구에서 만든 STT 본문을 붙여넣는다.
+2. PDF / PPT 텍스트와 메모를 함께 넣는다.
+3. 교수 프로필과 출력 타입을 선택한다.
+4. 앱에서 완성 프롬프트를 조립해 Claude / ChatGPT 등에 복붙한다.
+5. 외부 AI 결과 대본을 다시 가져와 버전별로 저장한다.
+6. 원하는 버전으로 TTS를 생성하고 반복 학습한다.
 
-## 최초 설치
+## 현재 구조
 
-1. 가상환경 생성
+- 백엔드: FastAPI
+- 프론트엔드: React + TypeScript + Zustand
+- 저장소: `data_v2.json`, `settings.json`, `audio/`
+- 빌드 산출물: `static-v2/`
 
-```bat
-py -m venv .venv
-```
+## 주요 기능
 
-2. 가상환경 활성화
+- 과목 / 세션 / 클립 단위 관리
+- 교수 프로필 CRUD
+- STT / PDF / 메모 저장
+- 프롬프트 조립
+- OpenAI 기반 대본 생성
+- 외부 AI 결과 대본 버전 저장
+- 버전 선택 후 TTS 생성
+- 반복 청취용 플레이어
 
-```bat
-.venv\Scripts\activate
-```
+## 실행
 
-3. 패키지 설치
+### 1. 의존성 설치
 
-```bat
+백엔드:
+
+```bash
 pip install -r requirements.txt
 ```
 
-4. 프로젝트 루트에 `.env` 파일 생성
+프론트엔드:
 
-```env
-OPENAI_API_KEY=여기에_본인_OpenAI_API_키
+```bash
+cd lectureteller-react
+npm install
 ```
 
-## 실행 / 종료
+### 2. 프론트 빌드
 
-- 실행: `start.bat`
-- 종료: `stop.bat`
+```bash
+cd lectureteller-react
+npm run build
+```
 
-`start.bat`는 `.venv`를 사용해 `uvicorn` 서버를 띄우고 브라우저에서 `http://127.0.0.1:8000`을 자동으로 엽니다.
+### 3. 서버 실행
 
-## 사용 방법
+```bash
+.\.venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+```
 
-1. 좌측에서 과목을 추가합니다.
-2. 과목 안에 단원을 추가합니다.
-3. 단원을 선택합니다.
-4. Claude 응답 텍스트를 붙여넣습니다.
-5. 목소리를 고른 뒤 `변환 및 저장`을 누릅니다.
-6. 생성된 오디오를 우측 플레이어에서 바로 재생합니다.
+브라우저:
 
-## 저장 구조
+```text
+http://127.0.0.1:8000/
+```
 
-- MP3: `audio/<과목명>/<단원명>.mp3`
-- 메타데이터: `data.json`
+## 설정
 
-Windows 파일명에 사용할 수 없는 문자가 과목명/단원명에 포함되면 저장 경로에서는 자동으로 `_`로 치환됩니다.
+`settings.json` 또는 앱 설정 모달에서 아래 항목을 관리한다.
+
+- `api_key`
+- `audio_dir`
+- `default_voice`
+- `default_text_model`
 
 ## 참고
 
-- OpenAI API 키는 `.env`의 `OPENAI_API_KEY`를 사용합니다.
-- TTS 모델은 고정으로 `tts-1`입니다.
-- UI에서 선택 가능한 기본 음성은 `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`입니다.
-- 정리된 텍스트가 4096자를 넘으면 OpenAI TTS 제한에 맞게 나눠서 저장해야 합니다.
+- `/v2` 경로도 계속 열리지만, 기본 진입점은 이제 `/`다.
+- 기존 정적 v1 파일은 남아 있어도 메인 UI로는 사용하지 않는다.

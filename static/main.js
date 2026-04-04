@@ -17,6 +17,7 @@ const state = {
   loading: false,
   mobile: window.matchMedia("(max-width: 860px)").matches,
   activeTab: "explore",
+  defaultVoice: "",
 };
 
 const el = {
@@ -52,6 +53,7 @@ const el = {
   closeSettings: document.getElementById("closeSettings"),
   settingsModal: document.getElementById("settingsModal"),
   settingApiKey: document.getElementById("settingApiKey"),
+  settingDefaultVoice: document.getElementById("settingDefaultVoice"),
   settingAudioDir: document.getElementById("settingAudioDir"),
   saveSettingsBtn: document.getElementById("saveSettings"),
   promptModal: document.getElementById("promptModal"),
@@ -290,12 +292,15 @@ function renderExplore() {
 function renderComposeHint() {
   const subject = selectedSubject();
   const unit = selectedUnit();
-  if (unit && unit.voice && el.voice.value !== unit.voice) {
+  if (unit && unit.voice) {
     el.voice.value = unit.voice;
+  } else if (state.defaultVoice) {
+    el.voice.value = state.defaultVoice;
   }
   el.composeHint.innerHTML = subject && unit
     ? `${ICONS.filePlus}<span>${escapeHtml(subject.name)} / ${escapeHtml(unit.name)}</span>`
     : `${ICONS.compose}<span>선택 필요</span>`;
+
 }
 
 function renderDetail() {
@@ -440,8 +445,16 @@ function refreshTextMeta(forceClean = false) {
   if (forceClean || before !== after) {
     el.input.value = after;
   }
-  el.charCount.textContent = `${after.length} / 4096`;
+  const len = after.length;
+  el.charCount.textContent = len > 4096
+    ? `${len}자 (청크 ${estimateChunks(after)}개 예상)`
+    : `${len} / 4096`;
   el.cleanState.textContent = before !== after ? "정리 완료" : "정리됨";
+}
+
+function estimateChunks(text, max = 4096) {
+  if (text.length <= max) return 1;
+  return Math.ceil(text.length / max) + 1; // rough estimate
 }
 
 function playCurrentAudio() {
@@ -777,6 +790,12 @@ el.input.addEventListener("paste", (event) => {
 });
 
 el.input.addEventListener("input", () => refreshTextMeta());
+el.input.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Enter") {
+    e.preventDefault();
+    generate();
+  }
+});
 el.generate.addEventListener("click", generate);
 el.addSubject.addEventListener("click", addSubject);
 el.addUnitHero.addEventListener("click", () => addUnit(state.selectedSubject));
@@ -799,6 +818,7 @@ el.openSettings.addEventListener("click", async () => {
     const settings = await api("/api/settings");
     el.settingApiKey.value = settings.api_key || "";
     el.settingAudioDir.value = settings.audio_dir || "";
+    el.settingDefaultVoice.value = settings.default_voice || "";
     el.settingsModal.classList.add("show");
     el.settingsModal.setAttribute("aria-hidden", "false");
   } catch (error) {
@@ -816,13 +836,18 @@ el.closeSettings.addEventListener("click", () => {
 el.saveSettingsBtn.addEventListener("click", async () => {
   try {
     setLoading(true);
-    await api("/api/settings", {
+    const saved = await api("/api/settings", {
       method: "POST",
       body: JSON.stringify({
         api_key: el.settingApiKey.value,
         audio_dir: el.settingAudioDir.value,
+        default_voice: el.settingDefaultVoice.value,
       }),
     });
+    state.defaultVoice = saved.default_voice || "";
+    if (state.defaultVoice) {
+      el.voice.value = state.defaultVoice;
+    }
     el.settingsModal.classList.remove("show");
     el.settingsModal.setAttribute("aria-hidden", "true");
     toast("설정이 저장되었습니다.");
@@ -843,8 +868,15 @@ async function init() {
   refreshTextMeta();
   setLoading(false);
   try {
-    const data = await api("/api/library");
+    const [data, settings] = await Promise.all([
+      api("/api/library"),
+      api("/api/settings"),
+    ]);
     state.library = data.library;
+    state.defaultVoice = settings.default_voice || "";
+    if (state.defaultVoice) {
+      el.voice.value = state.defaultVoice;
+    }
     setActiveTab(recommendedTab());
     render();
   } catch (error) {
@@ -874,5 +906,131 @@ window.closeAllDropdowns = function () {
 window.addEventListener("click", window.closeAllDropdowns);
 window.addEventListener("resize", window.closeAllDropdowns);
 el.subjectList.addEventListener("scroll", window.closeAllDropdowns, { passive: true });
+
+// ── Keyboard Shortcuts ────────────────────────────────────────────────────────
+
+function getActiveAudio() {
+  // Floating player takes priority if visible
+  if (el.floatingPlayer.classList.contains("show")) {
+    return el.fpAudio;
+  }
+  // Otherwise try inline player
+  return el.detail.querySelector("audio") || null;
+}
+
+function showSeekBubble(seconds) {
+  const sign = seconds > 0 ? "+" : "";
+  showKbdToast(`${sign}${seconds}초`);
+}
+
+function showVolumeBubble(volume) {
+  showKbdToast(`볼륨 ${Math.round(volume * 100)}%`);
+}
+
+let kbdToastTimer = null;
+function showKbdToast(text) {
+  let bubble = document.getElementById("kbdToast");
+  if (!bubble) {
+    bubble = document.createElement("div");
+    bubble.id = "kbdToast";
+    bubble.className = "kbd-toast";
+    document.body.appendChild(bubble);
+  }
+  bubble.textContent = text;
+  bubble.classList.add("show");
+  clearTimeout(kbdToastTimer);
+  kbdToastTimer = setTimeout(() => bubble.classList.remove("show"), 900);
+}
+
+function toggleCheatsheet() {
+  let sheet = document.getElementById("kbdCheatsheet");
+  if (!sheet) {
+    sheet = document.createElement("div");
+    sheet.id = "kbdCheatsheet";
+    sheet.className = "kbd-cheatsheet";
+    sheet.innerHTML = `
+      <div class="kbd-cheatsheet-inner">
+        <div class="kbd-cheatsheet-title">키보드 단축키 <span class="kbd-cheatsheet-close" id="kbdCheatsheetClose">✕</span></div>
+        <table class="kbd-table">
+          <tr><td><kbd>Space</kbd></td><td>재생 / 정지</td></tr>
+          <tr><td><kbd>←</kbd></td><td>10초 뒤로</td></tr>
+          <tr><td><kbd>→</kbd></td><td>10초 앞으로</td></tr>
+          <tr><td><kbd>↑</kbd></td><td>볼륨 +10%</td></tr>
+          <tr><td><kbd>↓</kbd></td><td>볼륨 −10%</td></tr>
+          <tr><td><kbd>M</kbd></td><td>음소거 토글</td></tr>
+          <tr><td><kbd>?</kbd></td><td>단축키 도움말</td></tr>
+        </table>
+      </div>`;
+    document.body.appendChild(sheet);
+    document.getElementById("kbdCheatsheetClose").addEventListener("click", () => {
+      sheet.classList.remove("show");
+    });
+  }
+  sheet.classList.toggle("show");
+}
+
+document.addEventListener("keydown", (e) => {
+  // Don't intercept when typing in inputs / modals are open
+  const tag = document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (document.querySelector(".overlay.show")) return;
+
+  const audio = getActiveAudio();
+
+  switch (e.key) {
+    case " ":
+    case "Spacebar": {
+      if (!audio) return;
+      e.preventDefault();
+      if (audio.paused) {
+        audio.play().catch(() => {});
+        showKbdToast("▶ 재생");
+      } else {
+        audio.pause();
+        showKbdToast("⏸ 정지");
+      }
+      break;
+    }
+    case "ArrowLeft": {
+      if (!audio) return;
+      e.preventDefault();
+      audio.currentTime = Math.max(0, audio.currentTime - 10);
+      showSeekBubble(-10);
+      break;
+    }
+    case "ArrowRight": {
+      if (!audio) return;
+      e.preventDefault();
+      audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10);
+      showSeekBubble(+10);
+      break;
+    }
+    case "ArrowUp": {
+      if (!audio) return;
+      e.preventDefault();
+      audio.volume = Math.min(1, +(audio.volume + 0.1).toFixed(1));
+      showVolumeBubble(audio.volume);
+      break;
+    }
+    case "ArrowDown": {
+      if (!audio) return;
+      e.preventDefault();
+      audio.volume = Math.max(0, +(audio.volume - 0.1).toFixed(1));
+      showVolumeBubble(audio.volume);
+      break;
+    }
+    case "m":
+    case "M": {
+      if (!audio) return;
+      audio.muted = !audio.muted;
+      showKbdToast(audio.muted ? "🔇 음소거" : "🔊 음소거 해제");
+      break;
+    }
+    case "?": {
+      toggleCheatsheet();
+      break;
+    }
+  }
+});
 
 init();

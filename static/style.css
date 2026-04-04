@@ -1126,3 +1126,119 @@ body.sidebar-collapsed .sidebar-open-btn {
     font-size: 0.78rem;
   }
 }
+
+/* ── Keyboard Shortcut UI ─────────────────────────────────────────────────── */
+
+/* Toast bubble for action feedback */
+.kbd-toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: rgba(20, 22, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 10px 22px;
+  border-radius: 999px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+  z-index: 200;
+  white-space: nowrap;
+}
+
+.kbd-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Cheatsheet panel */
+.kbd-cheatsheet {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px) scale(0.96);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.kbd-cheatsheet.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.kbd-cheatsheet-inner {
+  background: rgba(10, 12, 18, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 18px 22px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  min-width: 220px;
+}
+
+.kbd-cheatsheet-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.kbd-cheatsheet-close {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.9rem;
+  transition: color 150ms ease;
+}
+
+.kbd-cheatsheet-close:hover {
+  color: #fff;
+}
+
+.kbd-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.kbd-table tr + tr td {
+  padding-top: 8px;
+}
+
+.kbd-table td {
+  vertical-align: middle;
+  font-size: 0.88rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.kbd-table td:first-child {
+  padding-right: 16px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+kbd {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.4;
+}

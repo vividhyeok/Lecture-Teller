@@ -1,4 +1,5 @@
 fastapi
+mutagen
 python-dotenv
 requests
 uvicorn[standard]
