@@ -1,80 +1,89 @@
-# LectureTeller
+# LectureTeller 🎙
 
-LectureTeller는 `외부 STT / 외부 AI 결과 -> 학습용 TTS 자산` 흐름에 맞춘 로컬 앱이다.
+강의 대본을 붙여넣으면 OpenAI TTS로 MP3를 만들어주는 도구입니다.
 
-지금 기준 메인 제품은 React v2이며, 루트 `/`에서 바로 열린다. 핵심 작업 흐름은 아래와 같다.
+---
 
-1. NotebookLM 같은 외부 도구에서 만든 STT 본문을 붙여넣는다.
-2. PDF / PPT 텍스트와 메모를 함께 넣는다.
-3. 교수 프로필과 출력 타입을 선택한다.
-4. 앱에서 완성 프롬프트를 조립해 Claude / ChatGPT 등에 복붙한다.
-5. 외부 AI 결과 대본을 다시 가져와 버전별로 저장한다.
-6. 원하는 버전으로 TTS를 생성하고 반복 학습한다.
+## 빠른 시작
 
-## 현재 구조
-
-- 백엔드: FastAPI
-- 프론트엔드: React + TypeScript + Zustand
-- 저장소: `data_v2.json`, `settings.json`, `audio/`
-- 빌드 산출물: `static-v2/`
-
-## 주요 기능
-
-- 과목 / 세션 / 클립 단위 관리
-- 교수 프로필 CRUD
-- STT / PDF / 메모 저장
-- 프롬프트 조립
-- OpenAI 기반 대본 생성
-- 외부 AI 결과 대본 버전 저장
-- 버전 선택 후 TTS 생성
-- 반복 청취용 플레이어
-
-## 실행
-
-### 1. 의존성 설치
-
-백엔드:
-
-```bash
-pip install -r requirements.txt
+```
+start.bat   # 서버 시작 + 브라우저 자동 열기
+stop.bat    # 서버 종료
 ```
 
-프론트엔드:
+> **처음 설치할 때만** 아래 명령을 한 번 실행하세요:
+>
+> ```
+> py -m venv .venv
+> .venv\Scripts\activate
+> pip install -r requirements.txt
+> ```
+
+---
+
+## 사용법
+
+1. **대본 편집** 탭에서 텍스트 붙여넣기
+2. 상단 **음성 만들기** 클릭 → MP3 자동 생성
+3. 생성 완료 후 플레이어로 즉시 재생
+
+### 플레이어 단축키 (전역 — 재생 중 입력 불필요)
+
+| 키 | 동작 |
+|---|---|
+| `A` | 처음부터 |
+| `S` | −10초 |
+| `D` | 재생 / 정지 |
+| `F` | +10초 |
+| `G` | 정지 |
+| `← →` | −10초 / +10초 |
+
+> 편집기에 커서가 있을 때는 단축키가 비활성화됩니다.
+
+### 저장 / 생성 단축키
+
+| 키 | 동작 |
+|---|---|
+| `Ctrl + S` | 대본 저장 |
+| `Ctrl + Enter` | 음성 만들기 |
+
+---
+
+## 파일 구조
+
+```
+lectureteller/
+├── start.bat            # 서버 시작
+├── stop.bat             # 서버 종료
+├── app.py               # FastAPI 백엔드
+├── data_simple.json     # 대본 데이터
+├── audio/               # 생성된 MP3
+├── settings.json        # API 키, 음성 등 설정
+├── static-v2/           # React 빌드 결과물 (자동 생성)
+└── lectureteller-react/ # React 소스
+```
+
+---
+
+## 설정
+
+브라우저 오른쪽 상단 ⚙️ 설정에서:
+- **OpenAI API 키** 입력
+- **기본 음성** 선택 (alloy, echo, fable, onyx, nova, shimmer)
+
+또는 `.env` 파일에:
+
+```
+OPENAI_API_KEY=sk-...
+```
+
+---
+
+## 개발 / 프론트엔드 수정
 
 ```bash
 cd lectureteller-react
 npm install
+npm run dev      # 개발 서버 (hot reload, port 5173)
+npm run build    # static-v2/ 에 빌드 → 백엔드에서 서빙
 ```
-
-### 2. 프론트 빌드
-
-```bash
-cd lectureteller-react
-npm run build
-```
-
-### 3. 서버 실행
-
-```bash
-.\.venv\Scripts\python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
-```
-
-브라우저:
-
-```text
-http://127.0.0.1:8000/
-```
-
-## 설정
-
-`settings.json` 또는 앱 설정 모달에서 아래 항목을 관리한다.
-
-- `api_key`
-- `audio_dir`
-- `default_voice`
-- `default_text_model`
-
-## 참고
-
-- `/v2` 경로도 계속 열리지만, 기본 진입점은 이제 `/`다.
-- 기존 정적 v1 파일은 남아 있어도 메인 UI로는 사용하지 않는다.
