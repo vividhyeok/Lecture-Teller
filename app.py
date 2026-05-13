@@ -154,7 +154,7 @@ class GeneratePayload(BaseModel):
     subject: str = Field(..., min_length=1, max_length=120)
     unit: str = Field(..., min_length=1, max_length=120)
     text: str = Field(..., min_length=1)
-    voice: str = Field(default="alloy")
+    voice: str | None = Field(default=None)
 
 
 class QuickTtsPayload(BaseModel):
@@ -189,7 +189,7 @@ class ClipCreatePayload(BaseModel):
 class V2GeneratePayload(BaseModel):
     clip_id: str = Field(..., min_length=1)
     text: str = Field(default="")
-    voice: str = Field(default="alloy")
+    voice: str | None = Field(default=None)
     script_version_id: str | None = Field(default=None)
 
 
@@ -1259,43 +1259,57 @@ def sync_missing_audio(library: dict[str, Any]) -> bool:
 
 
 def split_to_chunks(text: str, max_chars: int = 900) -> list[str]:
-    """Split text at sentence boundaries so no chunk exceeds max_chars."""
-    # Sentence-ending punctuation (Korean + common)
-    sentence_end = re.compile(r'(?<=[.!?。…\n])\s*')
-    raw_sentences: list[str] = []
-    last = 0
-    for m in sentence_end.finditer(text):
-        end = m.end()
-        raw_sentences.append(text[last:end])
-        last = end
-    if last < len(text):
-        raw_sentences.append(text[last:])
+    """Split text for natural TTS phrasing while keeping each chunk under max_chars."""
+    normalized = text.strip()
+    if not normalized:
+        return [text]
 
-    chunks: list[str] = []
-    current = ""
-    for sentence in raw_sentences:
-        # If a single sentence exceeds the limit, split further by spaces
-        if len(sentence) > max_chars:
-            words = sentence.split(" ")
-            for word in words:
-                trial = (current + " " + word).lstrip() if current else word
-                if len(trial) > max_chars:
-                    if current:
-                        chunks.append(current.strip())
-                    current = word
-                else:
-                    current = trial
-        else:
-            trial = current + sentence
+    # 1) primary sentence boundaries
+    primary_units = [part.strip() for part in re.split(r'(?<=[.!?。…])\s+|\n+', normalized) if part.strip()]
+
+    # 2) secondary boundaries for long sentences: commas / semicolons / Korean particles with pause feel
+    secondary_units: list[str] = []
+    for unit in primary_units:
+        if len(unit) <= max_chars:
+            secondary_units.append(unit)
+            continue
+        fragments = [frag.strip() for frag in re.split(r'(?<=[,;:，、])\s+', unit) if frag.strip()]
+        secondary_units.extend(fragments or [unit])
+
+    # 3) final hard-wrap for very long tokens
+    tokens: list[str] = []
+    for unit in secondary_units:
+        if len(unit) <= max_chars:
+            tokens.append(unit)
+            continue
+        words = unit.split()
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip() if current else word
             if len(trial) > max_chars:
                 if current:
-                    chunks.append(current.strip())
-                current = sentence
+                    tokens.append(current)
+                current = word
             else:
                 current = trial
-    if current.strip():
-        chunks.append(current.strip())
-    return chunks or [text]
+        if current:
+            tokens.append(current)
+
+    # 4) pack units into chunk windows
+    chunks: list[str] = []
+    current_chunk = ""
+    for token in tokens:
+        separator = " " if current_chunk and not current_chunk.endswith((".", "!", "?", "…", "。")) else ""
+        trial = f"{current_chunk}{separator}{token}" if current_chunk else token
+        if len(trial) > max_chars:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = token
+        else:
+            current_chunk = trial
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    return chunks or [normalized]
 
 
 def create_speech_chunks(text: str, voice: str, destination: Path) -> list[dict[str, Any]]:
@@ -1363,7 +1377,7 @@ def create_speech_file(text: str, voice: str, destination: Path) -> None:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "tts-1",
+        "model": "gpt-4o-mini-tts",
         "voice": voice,
         "input": text,
         "response_format": "mp3",
@@ -1703,7 +1717,9 @@ def generate_tts(payload: GeneratePayload) -> dict[str, Any]:
     subject_name = normalize_display_name(payload.subject, "과목")
     unit_name = normalize_display_name(payload.unit, "단원")
     raw_text = payload.text
-    voice = validate_voice(payload.voice)
+    configured_voice = get_settings().get("default_voice", "").strip().lower()
+    preferred_voice = (payload.voice or configured_voice or "alloy").strip().lower()
+    voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="변환할 텍스트가 없습니다.")
@@ -2055,11 +2071,12 @@ def select_script_version(payload: SelectScriptVersionPayload) -> dict[str, Any]
 @app.post("/api/v2/generate")
 def v2_generate_tts(payload: V2GeneratePayload) -> dict[str, Any]:
     subject_name = normalize_display_name(payload.subject, "과목")
-    voice = validate_voice(payload.voice)
-
     with data_lock:
         library = load_v2_library_unlocked()
         subj, _, clip = resolve_v2_clip(library, subject_name, payload.week_id, payload.clip_id)
+        configured_voice = get_settings().get("default_voice", "").strip().lower()
+        preferred_voice = (payload.voice or configured_voice or clip.get("voice") or "alloy").strip().lower()
+        voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
         subject_storage = subj["storage_name"]
         clip_storage = clip["storage_name"]
         target_version_id = payload.script_version_id or clip.get("active_script_id")
@@ -2140,12 +2157,14 @@ def reorder_clips(payload: ReorderClipsPayload) -> dict[str, Any]:
 
 
 class PreviewVoicePayload(BaseModel):
-    voice: str
+    voice: str | None = Field(default=None)
     text: str = "안녕하세요, 저는 이 목소리의 주인공입니다."
 
 @app.post("/api/settings/preview-voice")
 def preview_voice(payload: PreviewVoicePayload):
-    voice = validate_voice(payload.voice)
+    configured_voice = get_settings().get("default_voice", "").strip().lower()
+    preferred_voice = (payload.voice or configured_voice or "alloy").strip().lower()
+    voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
     text = payload.text
     
     settings = get_settings()
@@ -2159,7 +2178,7 @@ def preview_voice(payload: PreviewVoicePayload):
         "Content-Type": "application/json",
     }
     data = {
-        "model": "tts-1",
+        "model": "gpt-4o-mini-tts",
         "voice": voice,
         "input": text,
         "response_format": "mp3"
