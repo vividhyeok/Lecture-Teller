@@ -25,12 +25,31 @@ interface ItemResponse extends LibraryResponse {
   item: ScriptItem
 }
 
+interface Settings {
+  api_key: string
+  audio_dir: string
+  default_voice: string
+  default_text_model: string
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 const STEP = 10
+const SPEED_STEP = 0.1
+const MIN_PLAYBACK_RATE = 0.1
+const MAX_PLAYBACK_RATE = 4.0
+const VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const
 const dateFormatter = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short' })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function clamp(v: number, lo: number, hi: number) { return Math.min(hi, Math.max(lo, v)) }
+
+function clampPlaybackRate(v: number) {
+  return Math.round(clamp(v, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE) * 10) / 10
+}
+
+function formatPlaybackRate(v: number) {
+  return `${clampPlaybackRate(v).toFixed(1)}x`
+}
 
 function formatTimestamp(v: string | null) {
   if (!v) return '-'
@@ -79,6 +98,7 @@ const IC = {
   Music: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>,
   Check: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>,
   Warn: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  Settings: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3.25"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.95 1.95 0 1 1-2.76 2.76l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.92V20a2 2 0 1 1-4 0v-.14a1 1 0 0 0-.67-.95 1 1 0 0 0-1.1.2l-.1.1a1.95 1.95 0 1 1-2.76-2.76l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.92-.6H4a2 2 0 1 1 0-4h.14a1 1 0 0 0 .95-.67 1 1 0 0 0-.2-1.1l-.1-.1a1.95 1.95 0 1 1 2.76-2.76l.1.1a1 1 0 0 0 1.1.2h.05a1 1 0 0 0 .55-.9V4a2 2 0 1 1 4 0v.14a1 1 0 0 0 .67.95 1 1 0 0 0 1.1-.2l.1-.1a1.95 1.95 0 1 1 2.76 2.76l-.1.1a1 1 0 0 0-.2 1.1v.05a1 1 0 0 0 .9.55H20a2 2 0 1 1 0 4h-.14a1 1 0 0 0-.95.67z"/></svg>,
   Edit: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   ChevronUp: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="18 15 12 9 6 15"/></svg>,
   ChevronDown: () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9"/></svg>,
@@ -98,11 +118,20 @@ export default function App() {
   const [generating, setGenerating]   = useState(false)
   const [message, setMessage]         = useState('')
   const [error, setError]             = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSaving, setSettingsSaving] = useState(false)
   const [shouldAutoplay, setShouldAutoplay] = useState(false)
   const [isPlaying, setIsPlaying]     = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration]       = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
   const [editorOpen, setEditorOpen]   = useState(true)
+  const [settingsForm, setSettingsForm] = useState<Settings>({
+    api_key: '',
+    audio_dir: '',
+    default_voice: 'alloy',
+    default_text_model: '',
+  })
 
   // Flash state for key-hit animations
   const [flashKey, setFlashKey]       = useState<string | null>(null)
@@ -111,6 +140,8 @@ export default function App() {
   const audioRef    = useRef<HTMLAudioElement | null>(null)
   const playerRef   = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const saveLockRef = useRef(false)
+  const generateLockRef = useRef(false)
 
   // Derived
   const selectedItem = useMemo(
@@ -209,6 +240,21 @@ export default function App() {
     focusPlayer()
   }
 
+  function applyPlaybackRate(nextRate: number) {
+    const next = clampPlaybackRate(nextRate)
+    if (audioRef.current) audioRef.current.playbackRate = next
+    setPlaybackRate(next)
+    return next
+  }
+
+  function changePlaybackRate(delta: number) {
+    const next = clampPlaybackRate(playbackRate + delta)
+    if (next === playbackRate) return
+    applyPlaybackRate(next)
+    flash(delta < 0 ? 'h' : 'j')
+    focusPlayer()
+  }
+
   // ── Server calls ──────────────────────────────────────────────────────────
   async function loadLibrary() {
     setLoading(true)
@@ -227,6 +273,20 @@ export default function App() {
     finally { setLoading(false) }
   }
 
+  async function loadSettings() {
+    try {
+      const res = await apiFetch<Settings>('/api/settings')
+      setSettingsForm({
+        api_key: res.api_key ?? '',
+        audio_dir: res.audio_dir ?? '',
+        default_voice: res.default_voice || 'alloy',
+        default_text_model: res.default_text_model ?? '',
+      })
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
   function syncFromResponse(res: ItemResponse) {
     setItems(res.items)
     setDefaultVoice(res.default_voice)
@@ -236,7 +296,8 @@ export default function App() {
   }
 
   async function saveScript() {
-    if (saving || generating) return
+    if (saveLockRef.current || generateLockRef.current) return
+    saveLockRef.current = true
     setSaving(true); setError(''); setMessage('')
     try {
       const res = await apiFetch<ItemResponse>('/api/simple/items', {
@@ -246,11 +307,15 @@ export default function App() {
       syncFromResponse(res)
       setMessage('저장됨')
     } catch (e) { setError((e as Error).message) }
-    finally { setSaving(false) }
+    finally {
+      saveLockRef.current = false
+      setSaving(false)
+    }
   }
 
   async function generateTts() {
-    if (saving || generating) return
+    if (saveLockRef.current || generateLockRef.current) return
+    generateLockRef.current = true
     setGenerating(true); setError(''); setMessage('')
     try {
       const res = await apiFetch<ItemResponse & { chunk_count: number }>('/api/simple/generate', {
@@ -264,7 +329,47 @@ export default function App() {
     } catch (e) {
       setError((e as Error).message)
       setShouldAutoplay(false)
-    } finally { setGenerating(false) }
+    } finally {
+      generateLockRef.current = false
+      setGenerating(false)
+    }
+  }
+
+  async function openSettings() {
+    setError('')
+    await loadSettings()
+    setSettingsOpen(true)
+  }
+
+  async function saveAppSettings() {
+    if (settingsSaving) return
+    setSettingsSaving(true)
+    setError('')
+    setMessage('')
+    try {
+      const payload: Settings = {
+        ...settingsForm,
+        api_key: settingsForm.api_key.trim(),
+        default_voice: settingsForm.default_voice || 'alloy',
+      }
+      const saved = await apiFetch<Settings>('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      setSettingsForm({
+        api_key: saved.api_key ?? '',
+        audio_dir: saved.audio_dir ?? '',
+        default_voice: saved.default_voice || 'alloy',
+        default_text_model: saved.default_text_model ?? '',
+      })
+      setDefaultVoice(saved.default_voice || 'alloy')
+      setSettingsOpen(false)
+      setMessage('설정을 저장했습니다.')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSettingsSaving(false)
+    }
   }
 
   async function deleteScript() {
@@ -316,8 +421,13 @@ export default function App() {
     setShouldAutoplay(false)
   }, [activeAudioUrl, shouldAutoplay, focusPlayer])
 
+  useEffect(() => {
+    if (!audioRef.current) return
+    audioRef.current.playbackRate = playbackRate
+  }, [activeAudioUrl, playbackRate])
+
   // ── Global keyboard shortcuts ─────────────────────────────────────────────
-  // Home-row layout: A=restart  S=-10s  D=play/pause  F=+10s  G=stop
+  // Home-row layout: A=restart  S=-10s  D=play/pause  F=+10s  G=stop  H=-0.1x  J=+0.1x
   // These fire globally when audio is active and user is NOT typing.
   // Ctrl+S / Ctrl+Enter always work regardless.
   useEffect(() => {
@@ -339,6 +449,8 @@ export default function App() {
         case 'd': e.preventDefault(); togglePlayback(); return
         case 'f': e.preventDefault(); seekBy(STEP); return
         case 'g': e.preventDefault(); stop(); return
+        case 'h': e.preventDefault(); changePlaybackRate(-SPEED_STEP); return
+        case 'j': e.preventDefault(); changePlaybackRate(SPEED_STEP); return
         // Arrow keys as bonus
         case 'arrowleft':  e.preventDefault(); seekBy(-STEP); return
         case 'arrowright': e.preventDefault(); seekBy(STEP); return
@@ -346,7 +458,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)
-  }, [activeAudioUrl, generating, saving, selectedId, text, title, duration])
+  }, [activeAudioUrl, generating, playbackRate, saving, selectedId, text, title, duration])
 
   const isBusy = saving || generating
 
@@ -420,6 +532,9 @@ export default function App() {
             <StatusBadge error={error} saving={saving} generating={generating} message={message} isDirty={isDirty} selectedItem={selectedItem} />
           </div>
           <div className="topbar-actions">
+            <button className="icon-btn" type="button" onClick={() => void openSettings()} title="설정" disabled={settingsSaving}>
+              <IC.Settings />
+            </button>
             {selectedItem && (
               <button className="icon-btn danger" type="button" onClick={() => void deleteScript()} disabled={isBusy} title="삭제">
                 <IC.Trash />
@@ -454,7 +569,7 @@ export default function App() {
               ref={playerRef}
               className={`player ${isPlaying ? 'playing' : ''}`}
               tabIndex={0}
-              aria-label="오디오 플레이어 — 포커스 후 Space/J/K/L/R/S 사용"
+              aria-label="오디오 플레이어. A S D F G H J 단축키 사용"
               onClick={e => { if (e.target === e.currentTarget) focusPlayer() }}
             >
               {/* Ambient glow behind player when playing */}
@@ -497,6 +612,37 @@ export default function App() {
                   <span className="time-cur">{formatClock(currentTime)}</span>
                   <span className="time-rem">-{formatClock(Math.max(0, duration - currentTime))}</span>
                 </div>
+              </div>
+
+              <div className="speed-row">
+                <span className="speed-label">배속</span>
+                <button
+                  className={`speed-step-btn ${flashKey === 'h' ? 'key-flash' : ''}`}
+                  type="button"
+                  onClick={() => changePlaybackRate(-SPEED_STEP)}
+                  title={`배속 -${SPEED_STEP.toFixed(1)}x (H)`}
+                >
+                  -{SPEED_STEP.toFixed(1)}x
+                </button>
+                <input
+                  className="speed-slider"
+                  type="range"
+                  min={MIN_PLAYBACK_RATE}
+                  max={MAX_PLAYBACK_RATE}
+                  step={SPEED_STEP}
+                  value={playbackRate}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => applyPlaybackRate(Number(e.target.value))}
+                  aria-label="재생 배속"
+                />
+                <button
+                  className={`speed-step-btn ${flashKey === 'j' ? 'key-flash' : ''}`}
+                  type="button"
+                  onClick={() => changePlaybackRate(SPEED_STEP)}
+                  title={`배속 +${SPEED_STEP.toFixed(1)}x (J)`}
+                >
+                  +{SPEED_STEP.toFixed(1)}x
+                </button>
+                <span className="speed-display">{formatPlaybackRate(playbackRate)}</span>
               </div>
 
               {/* Controls — matching A S D F G home row */}
@@ -545,7 +691,7 @@ export default function App() {
                 </a>
               </div>
 
-              {/* Shortcut hints — home-row A S D F G */}
+              {/* Shortcut hints — home-row A S D F G H J */}
               <div className="shortcut-row">
                 {[
                   { k: 'A', desc: '처음' },
@@ -553,6 +699,8 @@ export default function App() {
                   { k: 'D', desc: '재생/정지' },
                   { k: 'F', desc: `+${STEP}s` },
                   { k: 'G', desc: '정지' },
+                  { k: 'H', desc: `-${SPEED_STEP.toFixed(1)}x` },
+                  { k: 'J', desc: `+${SPEED_STEP.toFixed(1)}x` },
                 ].map(({ k, desc }) => (
                   <div key={k} className={`shortcut-chip ${flashKey === k.toLowerCase() ? 'chip-active' : ''}`}>
                     <kbd>{k}</kbd>
@@ -606,6 +754,59 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {settingsOpen && (
+        <div className="settings-overlay" role="dialog" aria-modal="true" onClick={() => setSettingsOpen(false)}>
+          <div className="settings-card" onClick={e => e.stopPropagation()}>
+            <div className="settings-header">
+              <div>
+                <strong>설정</strong>
+                <p>OpenAI API Key와 기본 목소리를 저장합니다.</p>
+              </div>
+              <button className="icon-btn" type="button" onClick={() => setSettingsOpen(false)} title="닫기">
+                <IC.ChevronDown />
+              </button>
+            </div>
+
+            <div className="settings-form">
+              <label className="settings-field">
+                <span>OpenAI API Key</span>
+                <input
+                  type="password"
+                  className="settings-input"
+                  placeholder="sk-..."
+                  value={settingsForm.api_key}
+                  onChange={e => setSettingsForm(current => ({ ...current, api_key: e.target.value }))}
+                />
+              </label>
+
+              <label className="settings-field">
+                <span>기본 목소리</span>
+                <select
+                  className="settings-input"
+                  value={settingsForm.default_voice}
+                  onChange={e => setSettingsForm(current => ({ ...current, default_voice: e.target.value }))}
+                >
+                  {VOICES.map(voice => (
+                    <option key={voice} value={voice}>
+                      {voice}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="settings-footer">
+              <button className="action-btn secondary" type="button" onClick={() => setSettingsOpen(false)} disabled={settingsSaving}>
+                취소
+              </button>
+              <button className="action-btn primary" type="button" onClick={() => void saveAppSettings()} disabled={settingsSaving}>
+                <IC.Save /> {settingsSaving ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

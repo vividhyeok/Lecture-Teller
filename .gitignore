@@ -26,6 +26,14 @@ settings.json
 tmp/
 temp/
 *.log
+build-tmp/
+msi-extract/
+server.exe
+
+# Tauri / desktop build outputs
+lectureteller-react/src-tauri/target/
+lectureteller-react/src-tauri/binaries/
+lectureteller-react/src-tauri/gen/
 
 # Design assets not needed in repo
 sample.html

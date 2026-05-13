@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import unicodedata
 import uuid as _uuid
 from datetime import datetime, timezone
@@ -20,13 +21,39 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-AUDIO_DIR = BASE_DIR / "audio"
-DATA_FILE = BASE_DIR / "data.json"
-DATA_V2_FILE = BASE_DIR / "data_v2.json"
-SIMPLE_DATA_FILE = BASE_DIR / "data_simple.json"
-SETTINGS_FILE = BASE_DIR / "settings.json"
+
+def _detect_resource_dir() -> Path:
+    override = os.environ.get("LT_RESOURCE_DIR", "").strip()
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _detect_data_dir() -> Path:
+    override = os.environ.get("LT_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
+    base_dir = os.environ.get("LT_BASE_DIR", "").strip()
+    if base_dir:
+        return Path(base_dir)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+RESOURCE_DIR = _detect_resource_dir()
+DATA_DIR = _detect_data_dir()
+BASE_DIR = DATA_DIR
+STATIC_DIR = RESOURCE_DIR / "static"
+if not STATIC_DIR.exists():
+    STATIC_DIR = DATA_DIR / "static"
+AUDIO_DIR = DATA_DIR / "audio"
+DATA_FILE = DATA_DIR / "data.json"
+DATA_V2_FILE = DATA_DIR / "data_v2.json"
+SIMPLE_DATA_FILE = DATA_DIR / "data_simple.json"
+SETTINGS_FILE = DATA_DIR / "settings.json"
 OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 VALID_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
@@ -59,16 +86,35 @@ RESERVED_WINDOWS_NAMES = {
     "LPT9",
 }
 
-STATIC_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+if not STATIC_DIR.exists() and STATIC_DIR.parent == DATA_DIR:
+    STATIC_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(DATA_DIR / ".env")
+if RESOURCE_DIR != DATA_DIR:
+    load_dotenv(RESOURCE_DIR / ".env")
+
+
+def seed_data_file(filename: str) -> None:
+    if RESOURCE_DIR == DATA_DIR:
+        return
+    source = RESOURCE_DIR / filename
+    target = DATA_DIR / filename
+    if source.exists() and not target.exists():
+        shutil.copy2(source, target)
+
+
+for seed_name in ("data.json", "data_v2.json", "data_simple.json"):
+    seed_data_file(seed_name)
 
 data_lock = Lock()
 app = FastAPI(title="Lecture Teller", version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-STATIC_V2_DIR = BASE_DIR / "static-v2"
-AUDIO_DIR_RUNTIME = BASE_DIR / "audio"
+STATIC_V2_DIR = RESOURCE_DIR / "static-v2"
+if not STATIC_V2_DIR.exists():
+    STATIC_V2_DIR = DATA_DIR / "static-v2"
+AUDIO_DIR_RUNTIME = AUDIO_DIR
 
 # Mount React build (if it exists — built by `npm run build` in lectureteller-react/)
 if STATIC_V2_DIR.exists():
@@ -108,7 +154,7 @@ class GeneratePayload(BaseModel):
     subject: str = Field(..., min_length=1, max_length=120)
     unit: str = Field(..., min_length=1, max_length=120)
     text: str = Field(..., min_length=1)
-    voice: str = Field(default="alloy")
+    voice: str | None = Field(default=None)
 
 
 class QuickTtsPayload(BaseModel):
@@ -143,7 +189,7 @@ class ClipCreatePayload(BaseModel):
 class V2GeneratePayload(BaseModel):
     clip_id: str = Field(..., min_length=1)
     text: str = Field(default="")
-    voice: str = Field(default="alloy")
+    voice: str | None = Field(default=None)
     script_version_id: str | None = Field(default=None)
 
 
@@ -433,6 +479,39 @@ def derive_simple_title(title: str, text: str) -> str:
     return (fallback[:120] if fallback else "새 대본")
 
 
+def normalize_simple_value(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def get_simple_item_fingerprint(title: str, text: str) -> tuple[str, str]:
+    normalized_title = normalize_simple_value(derive_simple_title(title, text)).casefold()
+    normalized_text = normalize_simple_value(text).casefold()
+    return normalized_title, normalized_text
+
+
+def get_simple_item_rank(item: dict[str, Any]) -> tuple[int, str, str, str]:
+    return (
+        1 if item.get("has_audio") else 0,
+        str(item.get("audio_updated_at") or ""),
+        str(item.get("updated_at") or ""),
+        str(item.get("created_at") or ""),
+    )
+
+
+def make_simple_item(current_time: str) -> dict[str, Any]:
+    return {
+        "id": str(_uuid.uuid4()),
+        "title": "",
+        "text": "",
+        "voice": "alloy",
+        "created_at": current_time,
+        "updated_at": current_time,
+        "audio_updated_at": None,
+        "has_audio": False,
+    }
+
+
 def get_simple_audio_file(item_id: str) -> Path:
     return get_active_audio_dir() / "_simple" / f"{item_id}.mp3"
 
@@ -518,6 +597,80 @@ def find_simple_item(library: dict[str, Any], item_id: str | None) -> dict[str, 
     if not item_id:
         return None
     return next((item for item in library.get("items", []) if item["id"] == item_id), None)
+
+
+def find_matching_simple_item(
+    library: dict[str, Any],
+    title: str,
+    text: str,
+    exclude_item_id: str | None = None,
+) -> dict[str, Any] | None:
+    fingerprint = get_simple_item_fingerprint(title, text)
+    if not any(fingerprint):
+        return None
+
+    matches = [
+        item
+        for item in library.get("items", [])
+        if item.get("id") != exclude_item_id
+        and get_simple_item_fingerprint(item.get("title", ""), item.get("text", "")) == fingerprint
+    ]
+    if not matches:
+        return None
+    return max(matches, key=get_simple_item_rank)
+
+
+def get_or_create_simple_item(
+    library: dict[str, Any],
+    item_id: str | None,
+    title: str,
+    text: str,
+    current_time: str,
+) -> dict[str, Any]:
+    item = find_simple_item(library, item_id)
+    if item:
+        return item
+
+    duplicate = find_matching_simple_item(library, title, text)
+    if duplicate:
+        return duplicate
+
+    item = make_simple_item(current_time)
+    item["title"] = derive_simple_title(title, text)
+    item["text"] = text
+    library.setdefault("items", []).append(item)
+    return item
+
+
+def dedupe_simple_library_unlocked(library: dict[str, Any]) -> bool:
+    raw_items = library.get("items")
+    if not isinstance(raw_items, list):
+        library["items"] = []
+        return True
+
+    deduped_items: list[dict[str, Any]] = []
+    seen_indexes: dict[tuple[str, str], int] = {}
+    changed = False
+
+    for item in raw_items:
+        fingerprint = get_simple_item_fingerprint(item.get("title", ""), item.get("text", ""))
+        if not any(fingerprint):
+            fingerprint = ("__id__", str(item.get("id") or ""))
+
+        existing_index = seen_indexes.get(fingerprint)
+        if existing_index is None:
+            seen_indexes[fingerprint] = len(deduped_items)
+            deduped_items.append(item)
+            continue
+
+        changed = True
+        existing_item = deduped_items[existing_index]
+        if get_simple_item_rank(item) > get_simple_item_rank(existing_item):
+            deduped_items[existing_index] = item
+
+    if changed:
+        library["items"] = deduped_items
+    return changed
 
 
 def sync_missing_simple_audio(library: dict[str, Any]) -> bool:
@@ -1106,43 +1259,57 @@ def sync_missing_audio(library: dict[str, Any]) -> bool:
 
 
 def split_to_chunks(text: str, max_chars: int = 900) -> list[str]:
-    """Split text at sentence boundaries so no chunk exceeds max_chars."""
-    # Sentence-ending punctuation (Korean + common)
-    sentence_end = re.compile(r'(?<=[.!?。…\n])\s*')
-    raw_sentences: list[str] = []
-    last = 0
-    for m in sentence_end.finditer(text):
-        end = m.end()
-        raw_sentences.append(text[last:end])
-        last = end
-    if last < len(text):
-        raw_sentences.append(text[last:])
+    """Split text for natural TTS phrasing while keeping each chunk under max_chars."""
+    normalized = text.strip()
+    if not normalized:
+        return [text]
 
-    chunks: list[str] = []
-    current = ""
-    for sentence in raw_sentences:
-        # If a single sentence exceeds the limit, split further by spaces
-        if len(sentence) > max_chars:
-            words = sentence.split(" ")
-            for word in words:
-                trial = (current + " " + word).lstrip() if current else word
-                if len(trial) > max_chars:
-                    if current:
-                        chunks.append(current.strip())
-                    current = word
-                else:
-                    current = trial
-        else:
-            trial = current + sentence
+    # 1) primary sentence boundaries
+    primary_units = [part.strip() for part in re.split(r'(?<=[.!?。…])\s+|\n+', normalized) if part.strip()]
+
+    # 2) secondary boundaries for long sentences: commas / semicolons / Korean particles with pause feel
+    secondary_units: list[str] = []
+    for unit in primary_units:
+        if len(unit) <= max_chars:
+            secondary_units.append(unit)
+            continue
+        fragments = [frag.strip() for frag in re.split(r'(?<=[,;:，、])\s+', unit) if frag.strip()]
+        secondary_units.extend(fragments or [unit])
+
+    # 3) final hard-wrap for very long tokens
+    tokens: list[str] = []
+    for unit in secondary_units:
+        if len(unit) <= max_chars:
+            tokens.append(unit)
+            continue
+        words = unit.split()
+        current = ""
+        for word in words:
+            trial = f"{current} {word}".strip() if current else word
             if len(trial) > max_chars:
                 if current:
-                    chunks.append(current.strip())
-                current = sentence
+                    tokens.append(current)
+                current = word
             else:
                 current = trial
-    if current.strip():
-        chunks.append(current.strip())
-    return chunks or [text]
+        if current:
+            tokens.append(current)
+
+    # 4) pack units into chunk windows
+    chunks: list[str] = []
+    current_chunk = ""
+    for token in tokens:
+        separator = " " if current_chunk and not current_chunk.endswith((".", "!", "?", "…", "。")) else ""
+        trial = f"{current_chunk}{separator}{token}" if current_chunk else token
+        if len(trial) > max_chars:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = token
+        else:
+            current_chunk = trial
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    return chunks or [normalized]
 
 
 def create_speech_chunks(text: str, voice: str, destination: Path) -> list[dict[str, Any]]:
@@ -1210,7 +1377,7 @@ def create_speech_file(text: str, voice: str, destination: Path) -> None:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "tts-1",
+        "model": "gpt-4o-mini-tts",
         "voice": voice,
         "input": text,
         "response_format": "mp3",
@@ -1328,7 +1495,9 @@ def get_quick_tts_file(filename: str) -> FileResponse:
 def get_simple_library() -> dict[str, Any]:
     with data_lock:
         library = load_simple_library_unlocked()
-        if sync_missing_simple_audio(library):
+        changed = sync_missing_simple_audio(library)
+        changed = dedupe_simple_library_unlocked(library) or changed
+        if changed:
             save_simple_library_unlocked(library)
     return build_simple_library_response(library)
 
@@ -1342,19 +1511,8 @@ def save_simple_item(payload: SimpleScriptPayload) -> dict[str, Any]:
     current_time = now_iso()
     with data_lock:
         library = load_simple_library_unlocked()
-        item = find_simple_item(library, payload.item_id)
-        if not item:
-            item = {
-                "id": str(_uuid.uuid4()),
-                "title": "",
-                "text": "",
-                "voice": "alloy",
-                "created_at": current_time,
-                "updated_at": current_time,
-                "audio_updated_at": None,
-                "has_audio": False,
-            }
-            library.setdefault("items", []).append(item)
+        dedupe_simple_library_unlocked(library)
+        item = get_or_create_simple_item(library, payload.item_id, payload.title, raw_text, current_time)
 
         text_changed = item.get("text", "") != raw_text
         if text_changed and item.get("has_audio"):
@@ -1385,19 +1543,8 @@ def generate_simple_tts(payload: SimpleGeneratePayload) -> dict[str, Any]:
     saved_at = now_iso()
     with data_lock:
         library = load_simple_library_unlocked()
-        item = find_simple_item(library, payload.item_id)
-        if not item:
-            item = {
-                "id": str(_uuid.uuid4()),
-                "title": "",
-                "text": "",
-                "voice": "alloy",
-                "created_at": saved_at,
-                "updated_at": saved_at,
-                "audio_updated_at": None,
-                "has_audio": False,
-            }
-            library.setdefault("items", []).append(item)
+        dedupe_simple_library_unlocked(library)
+        item = get_or_create_simple_item(library, payload.item_id, payload.title, raw_text, saved_at)
 
         if item.get("text", "") != raw_text and item.get("has_audio"):
             get_simple_audio_file(item["id"]).unlink(missing_ok=True)
@@ -1570,7 +1717,9 @@ def generate_tts(payload: GeneratePayload) -> dict[str, Any]:
     subject_name = normalize_display_name(payload.subject, "과목")
     unit_name = normalize_display_name(payload.unit, "단원")
     raw_text = payload.text
-    voice = validate_voice(payload.voice)
+    configured_voice = get_settings().get("default_voice", "").strip().lower()
+    preferred_voice = (payload.voice or configured_voice or "alloy").strip().lower()
+    voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="변환할 텍스트가 없습니다.")
@@ -1922,11 +2071,12 @@ def select_script_version(payload: SelectScriptVersionPayload) -> dict[str, Any]
 @app.post("/api/v2/generate")
 def v2_generate_tts(payload: V2GeneratePayload) -> dict[str, Any]:
     subject_name = normalize_display_name(payload.subject, "과목")
-    voice = validate_voice(payload.voice)
-
     with data_lock:
         library = load_v2_library_unlocked()
         subj, _, clip = resolve_v2_clip(library, subject_name, payload.week_id, payload.clip_id)
+        configured_voice = get_settings().get("default_voice", "").strip().lower()
+        preferred_voice = (payload.voice or configured_voice or clip.get("voice") or "alloy").strip().lower()
+        voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
         subject_storage = subj["storage_name"]
         clip_storage = clip["storage_name"]
         target_version_id = payload.script_version_id or clip.get("active_script_id")
@@ -2007,12 +2157,14 @@ def reorder_clips(payload: ReorderClipsPayload) -> dict[str, Any]:
 
 
 class PreviewVoicePayload(BaseModel):
-    voice: str
+    voice: str | None = Field(default=None)
     text: str = "안녕하세요, 저는 이 목소리의 주인공입니다."
 
 @app.post("/api/settings/preview-voice")
 def preview_voice(payload: PreviewVoicePayload):
-    voice = validate_voice(payload.voice)
+    configured_voice = get_settings().get("default_voice", "").strip().lower()
+    preferred_voice = (payload.voice or configured_voice or "alloy").strip().lower()
+    voice = validate_voice(preferred_voice if preferred_voice in VALID_VOICES else "alloy")
     text = payload.text
     
     settings = get_settings()
@@ -2026,7 +2178,7 @@ def preview_voice(payload: PreviewVoicePayload):
         "Content-Type": "application/json",
     }
     data = {
-        "model": "tts-1",
+        "model": "gpt-4o-mini-tts",
         "voice": voice,
         "input": text,
         "response_format": "mp3"
