@@ -87,7 +87,17 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          python -c "import json, os, pathlib, re; v=os.environ['RELEASE_VERSION']; p=pathlib.Path('lectureteller-react/src-tauri/tauri.conf.json'); d=json.loads(p.read_text(encoding='utf-8')); d['version']=v; p.write_text(json.dumps(d, ensure_ascii=False, indent=2)+'\n', encoding='utf-8'); c=pathlib.Path('lectureteller-react/src-tauri/Cargo.toml'); s=c.read_text(encoding='utf-8'); s=re.sub(r'(?m)^version = \"[^\"]+\"$', f'version = \"{v}\"', s, count=1); c.write_text(s, encoding='utf-8')"
+          $configPath = 'lectureteller-react/src-tauri/tauri.conf.json'
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.version = $env:RELEASE_VERSION
+          $config | ConvertTo-Json -Depth 100 | Set-Content $configPath -Encoding utf8
+
+          $cargoPath = 'lectureteller-react/src-tauri/Cargo.toml'
+          $cargo = Get-Content $cargoPath -Raw
+          $cargo = $cargo -replace '(?m)^version = "[^"]+"$', "version = `"$env:RELEASE_VERSION`""
+          Set-Content $cargoPath -Value $cargo -Encoding utf8 -NoNewline
+
+          Write-Host "Synced Tauri/Cargo version to $env:RELEASE_VERSION"
 
       - name: Detect Rust host target
         id: rust_target
