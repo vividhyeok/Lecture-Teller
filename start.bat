@@ -18,9 +18,9 @@ if not exist "%PYTHON_EXE%" (
   exit /b 1
 )
 
-:: ── Already running? ────────────────────────────────────────────────────────
+:: ── Already running? ─────────────────────────────────────────────────────────
 set "RUNNING_PID="
-for /f %%i in ('powershell -NoProfile -Command "$py=(Resolve-Path '.\.venv\Scripts\python.exe').Path; foreach ($p in Get-CimInstance Win32_Process) { if ($p.ExecutablePath -eq $py -and $p.CommandLine -like '*uvicorn app:app*') { $p.ProcessId; break } }"') do set "RUNNING_PID=%%i"
+for /f %%i in ('powershell -NoProfile -Command "$py=(Resolve-Path '.\.venv\Scripts\python.exe').Path; foreach ($p in Get-CimInstance Win32_Process) { if ($p.ExecutablePath -eq $py -and ($p.CommandLine -like '*uvicorn server_entry:app*' -or $p.CommandLine -like '*uvicorn app:app*')) { $p.ProcessId; break } }"') do set "RUNNING_PID=%%i"
 
 if defined RUNNING_PID (
   >"%PID_FILE%" echo !RUNNING_PID!
@@ -31,7 +31,7 @@ if defined RUNNING_PID (
 
 :: ── Start server ─────────────────────────────────────────────────────────────
 echo LectureTeller 서버를 시작합니다...
-for /f %%i in ('powershell -NoProfile -Command "$p=Start-Process -FilePath '.\.venv\Scripts\python.exe' -ArgumentList '-m','uvicorn','app:app','--host','127.0.0.1','--port','8000' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru; $p.Id"') do set "SERVER_PID=%%i"
+for /f %%i in ('powershell -NoProfile -Command "$p=Start-Process -FilePath '.\.venv\Scripts\python.exe' -ArgumentList '-m','uvicorn','server_entry:app','--host','127.0.0.1','--port','8000' -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru; $p.Id"') do set "SERVER_PID=%%i"
 
 if not defined SERVER_PID (
   echo [오류] 서버 프로세스를 시작할 수 없습니다.
