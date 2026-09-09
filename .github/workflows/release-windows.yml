@@ -1,0 +1,148 @@
+name: Build Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (example: 1.1.0)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $version = '${{ inputs.version }}'.Trim()
+          } else {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "Invalid version: $version"
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Compile Python entrypoints
+        run: python -m py_compile app.py stable_routes.py server_entry.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: lectureteller-react/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lectureteller-react/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: lectureteller-react
+        run: npm ci
+
+      - name: Build React frontend
+        working-directory: lectureteller-react
+        run: npm run build
+
+      - name: Sync app version
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -c "import json, os, pathlib, re; v=os.environ['RELEASE_VERSION']; p=pathlib.Path('lectureteller-react/src-tauri/tauri.conf.json'); d=json.loads(p.read_text(encoding='utf-8')); d['version']=v; p.write_text(json.dumps(d, ensure_ascii=False, indent=2)+'\n', encoding='utf-8'); c=pathlib.Path('lectureteller-react/src-tauri/Cargo.toml'); s=c.read_text(encoding='utf-8'); s=re.sub(r'(?m)^version = \"[^\"]+\"$', f'version = \"{v}\"', s, count=1); c.write_text(s, encoding='utf-8')"
+
+      - name: Detect Rust host target
+        id: rust_target
+        shell: pwsh
+        run: |
+          $hostLine = rustc -vV | Select-String '^host:' | Select-Object -First 1
+          if (-not $hostLine) { throw 'Could not detect Rust host target.' }
+          $target = ($hostLine.ToString() -split ':', 2)[1].Trim()
+          "target=$target" >> $env:GITHUB_OUTPUT
+          Write-Host "Rust target: $target"
+
+      - name: Build Python sidecar
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --name server `
+            --distpath . `
+            --workpath build-tmp/pyinstaller-work `
+            --specpath build-tmp `
+            --collect-all uvicorn `
+            --collect-all fastapi `
+            --collect-all starlette `
+            --collect-all pydantic `
+            --collect-all pydantic_core `
+            --hidden-import uvicorn.logging `
+            --hidden-import uvicorn.loops `
+            --hidden-import uvicorn.loops.auto `
+            --hidden-import uvicorn.protocols `
+            --hidden-import uvicorn.protocols.http `
+            --hidden-import uvicorn.protocols.http.auto `
+            --hidden-import uvicorn.protocols.websockets `
+            --hidden-import uvicorn.protocols.websockets.auto `
+            --hidden-import uvicorn.lifespan `
+            --hidden-import uvicorn.lifespan.on `
+            server_entry.py
+
+      - name: Stage sidecar for Tauri
+        shell: pwsh
+        env:
+          RUST_TARGET: ${{ steps.rust_target.outputs.target }}
+        run: |
+          New-Item -ItemType Directory -Force -Path 'lectureteller-react/src-tauri/binaries' | Out-Null
+          Copy-Item 'server.exe' "lectureteller-react/src-tauri/binaries/server-$env:RUST_TARGET.exe" -Force
+
+      - name: Build and publish Windows installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: lectureteller-react
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: 'LectureTeller v${{ steps.version.outputs.version }}'
+          releaseBody: |
+            Windows x64 installer for LectureTeller.
+
+            Download the `setup.exe` asset below and run it to install LectureTeller.
+          releaseDraft: false
+          prerelease: false
+          args: '--bundles nsis'
