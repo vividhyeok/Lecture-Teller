@@ -6,7 +6,42 @@
 
 ---
 
-## 빠른 시작
+## 가장 쉬운 설치
+
+GitHub **Releases**에서 최신 Windows 설치파일을 내려받아 실행하면 됩니다.
+
+```text
+LectureTeller_*_x64-setup.exe
+```
+
+Release 빌드는 GitHub Actions가 Windows 환경에서 자동으로 수행합니다. 로컬 PC에 Python, Node.js, Rust, PyInstaller를 설치할 필요가 없습니다.
+
+### 새 버전 Release 만들기
+
+GitHub에서:
+
+```text
+Actions
+→ Build Windows Release
+→ Run workflow
+→ version 입력 (예: 1.1.0)
+```
+
+하면 다음 과정이 자동으로 실행됩니다.
+
+```text
+React production build
+→ Python FastAPI sidecar를 PyInstaller EXE로 빌드
+→ Tauri NSIS Windows installer 생성
+→ v1.1.0 태그 및 GitHub Release 생성
+→ setup.exe 업로드
+```
+
+`v*` 태그를 직접 푸시하거나 `release-v*` 브랜치를 푸시해도 동일한 Release workflow가 실행됩니다.
+
+---
+
+## 개발용 빠른 시작
 
 ```bat
 start.bat   # 필요한 경우 프론트엔드 자동 빌드 → 서버 시작 → 브라우저 열기
@@ -192,6 +227,9 @@ Lecture-Teller/
 ├── audio/
 ├── settings.json
 ├── static-v2/                     # 빌드된 React UI
+├── .github/workflows/
+│   ├── ci.yml
+│   └── release-windows.yml        # Windows setup.exe 자동 Release
 └── lectureteller-react/
     └── src/
         ├── AppStable2.tsx
