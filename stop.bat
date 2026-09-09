@@ -16,7 +16,7 @@ if exist "%PID_FILE%" (
 
 :: ── Fallback: scan processes ─────────────────────────────────────────────────
 if not defined STOPPED_PID (
-  for /f %%i in ('powershell -NoProfile -Command "$py=(Resolve-Path '.\.venv\Scripts\python.exe').Path; foreach ($p in Get-CimInstance Win32_Process) { if ($p.ExecutablePath -eq $py -and $p.CommandLine -like '*uvicorn app:app*') { $p.ProcessId } }"') do (
+  for /f %%i in ('powershell -NoProfile -Command "$py=(Resolve-Path '.\.venv\Scripts\python.exe').Path; foreach ($p in Get-CimInstance Win32_Process) { if ($p.ExecutablePath -eq $py -and ($p.CommandLine -like '*uvicorn server_entry:app*' -or $p.CommandLine -like '*uvicorn app:app*')) { $p.ProcessId } }"') do (
     taskkill /PID %%i /T /F >nul 2>&1
     if not errorlevel 1 set "STOPPED_PID=%%i"
   )
