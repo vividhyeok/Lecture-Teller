@@ -13,6 +13,8 @@ venv/
 # Application Data
 audio/
 settings.json
+lecture_meta.json
+.frontend.sha256
 *.db
 *.sqlite3
 
