@@ -1,5 +1,5 @@
 """
-PyInstaller entry point for the LectureTeller backend.
+PyInstaller / uvicorn entry point for the LectureTeller backend.
 
 When launched as a Tauri sidecar, Rust provides:
 - LT_RESOURCE_DIR for bundled read-only assets.
@@ -19,14 +19,21 @@ def _base_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+base = _base_dir()
+os.environ.setdefault("LT_BASE_DIR", base)
+
+from app import app as app  # noqa: E402
+from stable_routes import router as stable_router  # noqa: E402
+
+# The original app.py stays untouched. The stable workflow is layered on top so
+# the existing simple/v2 APIs and data remain backwards-compatible.
+app.include_router(stable_router)
+
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
-    base = _base_dir()
-    os.environ.setdefault("LT_BASE_DIR", base)
-
     import uvicorn
-    from app import app
 
     uvicorn.run(
         app,
